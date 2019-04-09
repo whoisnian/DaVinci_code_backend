@@ -8,7 +8,10 @@ import (
 	"github.com/go-redis/redis"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/websocket"
+	"io/ioutil"
 	"net/http"
+	"strconv"
+	"time"
 )
 
 // 配置选项
@@ -16,6 +19,8 @@ var addr = flag.String("addr", "0.0.0.0:8080", "http service address")
 var dsn = flag.String("dsn", "davinci:4KzyzTL9gyQpycJ9@/DaVinci_code", "database address")
 var redisAddr = flag.String("redisAddr", "127.0.0.1:6379", "redis address")
 var redisPass = flag.String("redisPass", "", "redis password")
+var appid = flag.String("appid", "", "wechat appid")
+var secret = flag.String("secret", "", "wechat secret")
 
 var db *sql.DB
 var redisclient *redis.Client
@@ -32,8 +37,95 @@ func login(json *simplejson.Json, conn *websocket.Conn) {
 	code, err := json.Get("data").Get("code").String()
 	if err != nil {
 		fmt.Println("get code: ", err)
+		return
 	}
 	fmt.Println(code)
+
+	var httpclient http.Client
+	req, err := http.NewRequest(http.MethodGet, "https://api.weixin.qq.com/sns/jscode2session?appid="+*appid+"&secret="+*secret+"&js_code="+code+"&grant_type=authorization_code", nil)
+	if err != nil {
+		fmt.Println("new request: ", err)
+		return
+	}
+	resp, err := httpclient.Do(req)
+	if err != nil {
+		fmt.Println("do req: ", err)
+		return
+	}
+	defer resp.Body.Close()
+	content, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Println("read all: ", err)
+		return
+	}
+	respjson, err := simplejson.NewJson(content)
+	if err != nil {
+		fmt.Println("newjson: ", err)
+		return
+	}
+	var errcode int
+	_, ok := respjson.CheckGet("errcode")
+	if ok {
+		errcode, err = respjson.Get("errcode").Int()
+		if err != nil {
+			fmt.Println("get errcode: ", err)
+			return
+		}
+	} else {
+		errcode = 0
+	}
+	var res *simplejson.Json
+	if errcode == 0 {
+		openid, err := respjson.Get("openid").String()
+		session_key, err := respjson.Get("session_key").String()
+
+		row, err := db.Query("SELECT 1 from user where openid=? limit 1", openid)
+		defer row.Close()
+		if err != nil {
+			fmt.Println("select: ", err)
+			return
+		}
+		if row.Next() {
+			return
+		}
+		_, err = db.Exec("INSERT user SET openid=?,time=?", openid, time.Now().Format("2006-01-02 15:04:05"))
+		_, err = db.Exec("INSERT score SET openid=?", openid)
+		_, err = db.Exec("INSERT setting SET openid=?", openid)
+		if err != nil {
+			fmt.Println("insert: ", err)
+			return
+		}
+
+		res, err = simplejson.NewJson([]byte(`{
+    "action": "loginres",
+    "status": 0,
+    "msg": "ok",
+    "data": {
+        "openid": "` + openid + `",
+        "session_key": "` + session_key + `"
+    }
+		}`))
+		if err != nil {
+			fmt.Println("new json: ", err)
+			return
+		}
+	} else {
+		errmsg, err := respjson.Get("errmsg").String()
+		res, err = simplejson.NewJson([]byte(`{
+    "action": "loginres",
+    "status": ` + strconv.Itoa(errcode) + `,
+    "msg": "` + errmsg + `",
+    "data": {
+        "openid": "",
+        "session_key": ""
+    }
+		}`))
+		if err != nil {
+			fmt.Println("new json: ", err)
+			return
+		}
+	}
+	conn.WriteJSON(res.Interface())
 }
 
 func ws(w http.ResponseWriter, r *http.Request) {
@@ -81,7 +173,8 @@ func main() {
 	flag.Parse()
 
 	// 连接mysql数据库
-	db, err := sql.Open("mysql", *dsn)
+	var err error
+	db, err = sql.Open("mysql", *dsn)
 	if err != nil {
 		fmt.Println("database: ", err)
 		return
