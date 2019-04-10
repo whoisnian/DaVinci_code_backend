@@ -26,12 +26,14 @@ CREATE TABLE `DaVinci_code`.`score`(
     `numwin3` int(11) NOT NULL DEFAULT 0,
     `num2` int(11) NOT NULL DEFAULT 0,
     `numwin2` int(11) NOT NULL DEFAULT 0,
-    PRIMARY KEY(`id`)
+    PRIMARY KEY(`id`),
+    UNIQUE(`openid`)
 ) ENGINE = InnoDB;
 
 CREATE TABLE `DaVinci_code`.`setting`(
     `id` INT NOT NULL AUTO_INCREMENT,
     `openid` VARCHAR(255) NOT NULL,
     `vol` INT NOT NULL DEFAULT 0,
-    PRIMARY KEY(`id`)
+    PRIMARY KEY(`id`),
+    UNIQUE(`openid`)
 ) ENGINE = InnoDB;

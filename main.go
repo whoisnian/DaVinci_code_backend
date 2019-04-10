@@ -39,8 +39,8 @@ func login(json *simplejson.Json, conn *websocket.Conn) {
 		fmt.Println("get code: ", err)
 		return
 	}
-	fmt.Println(code)
 
+	// 调用微信api获取openid
 	var httpclient http.Client
 	req, err := http.NewRequest(http.MethodGet, "https://api.weixin.qq.com/sns/jscode2session?appid="+*appid+"&secret="+*secret+"&js_code="+code+"&grant_type=authorization_code", nil)
 	if err != nil {
@@ -63,6 +63,7 @@ func login(json *simplejson.Json, conn *websocket.Conn) {
 		fmt.Println("newjson: ", err)
 		return
 	}
+	// 获取失败时json才有errcode和errmsg，且没有openid和session_key
 	var errcode int
 	_, ok := respjson.CheckGet("errcode")
 	if ok {
@@ -89,7 +90,15 @@ func login(json *simplejson.Json, conn *websocket.Conn) {
 			return
 		}
 		_, err = db.Exec("INSERT user SET openid=?,time=?", openid, time.Now().Format("2006-01-02 15:04:05"))
+		if err != nil {
+			fmt.Println("insert: ", err)
+			return
+		}
 		_, err = db.Exec("INSERT score SET openid=?", openid)
+		if err != nil {
+			fmt.Println("insert: ", err)
+			return
+		}
 		_, err = db.Exec("INSERT setting SET openid=?", openid)
 		if err != nil {
 			fmt.Println("insert: ", err)
@@ -128,6 +137,65 @@ func login(json *simplejson.Json, conn *websocket.Conn) {
 	conn.WriteJSON(res.Interface())
 }
 
+func updateuserinfo(json *simplejson.Json, conn *websocket.Conn) {
+	openid, err := json.Get("data").Get("openid").String()
+	if err != nil {
+		fmt.Println("get openid: ", err)
+		return
+	}
+	nickName, err := json.Get("data").Get("nickName").String()
+	if err != nil {
+		fmt.Println("get nickName: ", err)
+		return
+	}
+	avatarUrl, err := json.Get("data").Get("avatarUrl").String()
+	if err != nil {
+		fmt.Println("get avatarUrl: ", err)
+		return
+	}
+	gender, err := json.Get("data").Get("gender").Int()
+	if err != nil {
+		fmt.Println("get gender: ", err)
+		return
+	}
+
+	_, err = db.Exec("UPDATE user SET nickname=?,avatarurl=?,gender=? WHERE openid=?", nickName, avatarUrl, gender, openid)
+	var res *simplejson.Json
+	if err != nil {
+		fmt.Println("update: ", err)
+		res, err = simplejson.NewJson([]byte(`{
+    "action": "updateuserinfores",
+    "status": -1,
+    "msg": "` + err.Error() + `",
+    "data": {
+    }
+		}`))
+		if err != nil {
+			fmt.Println("new json: ", err)
+			return
+		}
+	} else {
+		res, err = simplejson.NewJson([]byte(`{
+    "action": "updateuserinfores",
+    "status": 0,
+    "msg": "ok",
+    "data": {
+    }
+		}`))
+		if err != nil {
+			fmt.Println("new json: ", err)
+			return
+		}
+	}
+	conn.WriteJSON(res.Interface())
+}
+
+//func createroom(json *simplejson.Json, conn *websocket.Conn);
+//func enterroom(json *simplejson.Json, conn *websocket.Conn);
+//func startroomgame(json *simplejson.Json, conn *websocket.Conn);
+//func broadcast(json *simplejson.Json, conn *websocket.Conn);
+//func uploadscores(json *simplejson.Json, conn *websocket.Conn);
+
 func ws(w http.ResponseWriter, r *http.Request) {
 	// 建立websocket连接
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -138,6 +206,7 @@ func ws(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	for {
+
 		// 接收消息
 		mt, message, err := conn.ReadMessage()
 		if err != nil {
@@ -145,26 +214,28 @@ func ws(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if mt != websocket.TextMessage {
-			break
+			continue
 		}
 
 		// 转换为json
 		json, err := simplejson.NewJson(message)
 		if err != nil {
 			fmt.Println("newjson: ", err)
-			break
+			continue
 		}
 
 		// 获取action
 		action, err := json.Get("action").String()
 		if err != nil {
 			fmt.Println("get action: ", err)
-			break
+			continue
 		}
 
 		// 调用对应请求
 		if action == "login" {
 			go login(json, conn)
+		} else if action == "updateuserinfo" {
+			go updateuserinfo(json, conn)
 		}
 	}
 }
