@@ -9,6 +9,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/websocket"
 	"io/ioutil"
+	"math/rand"
 	"net/http"
 	"strconv"
 	"time"
@@ -86,23 +87,22 @@ func login(json *simplejson.Json, conn *websocket.Conn) {
 			fmt.Println("select: ", err)
 			return
 		}
-		if row.Next() {
-			return
-		}
-		_, err = db.Exec("INSERT user SET openid=?,time=?", openid, time.Now().Format("2006-01-02 15:04:05"))
-		if err != nil {
-			fmt.Println("insert: ", err)
-			return
-		}
-		_, err = db.Exec("INSERT score SET openid=?", openid)
-		if err != nil {
-			fmt.Println("insert: ", err)
-			return
-		}
-		_, err = db.Exec("INSERT setting SET openid=?", openid)
-		if err != nil {
-			fmt.Println("insert: ", err)
-			return
+		if !row.Next() {
+			_, err = db.Exec("INSERT user SET openid=?,time=?", openid, time.Now().Format("2006-01-02 15:04:05"))
+			if err != nil {
+				fmt.Println("insert: ", err)
+				return
+			}
+			_, err = db.Exec("INSERT score SET openid=?", openid)
+			if err != nil {
+				fmt.Println("insert: ", err)
+				return
+			}
+			_, err = db.Exec("INSERT setting SET openid=?", openid)
+			if err != nil {
+				fmt.Println("insert: ", err)
+				return
+			}
 		}
 
 		res, err = simplejson.NewJson([]byte(`{
@@ -190,7 +190,66 @@ func updateuserinfo(json *simplejson.Json, conn *websocket.Conn) {
 	conn.WriteJSON(res.Interface())
 }
 
-//func createroom(json *simplejson.Json, conn *websocket.Conn);
+func createroom(json *simplejson.Json, conn *websocket.Conn) {
+	openid, err := json.Get("data").Get("openid").String()
+	if err != nil {
+		fmt.Println("get openid: ", err)
+		return
+	}
+	roomcapacity, err := json.Get("data").Get("roomcapacity").Int()
+	if err != nil {
+		fmt.Println("get roomcapacity: ", err)
+		return
+	}
+
+	rand.Seed(time.Now().UnixNano())
+	roomid := strconv.Itoa(rand.Intn(899999) + 100000)
+	cnt := 0
+	for redisclient.Get("roomcap"+roomid).Err() != redis.Nil {
+		roomid = strconv.Itoa(rand.Intn(899999) + 100000)
+		cnt++
+		if cnt > 10 {
+			break
+		}
+	}
+
+	if cnt <= 10 {
+		redisclient.Set("roomcap"+roomid, roomcapacity, time.Hour)
+		err = redisclient.RPush("room"+roomid, openid).Err()
+		redisclient.Expire("room"+roomid, time.Hour)
+	}
+
+	var res *simplejson.Json
+	if err != nil || cnt > 10 {
+		fmt.Println("create: ", err)
+		res, err = simplejson.NewJson([]byte(`{
+    "action": "createroomres",
+    "status": -1,
+    "msg": "` + err.Error() + `",
+    "data": {
+    }
+		}`))
+		if err != nil {
+			fmt.Println("new json: ", err)
+			return
+		}
+	} else {
+		res, err = simplejson.NewJson([]byte(`{
+    "action": "createroomres",
+    "status": 0,
+    "msg": "ok",
+    "data": {
+	"roomid": "` + roomid + `"
+    }
+		}`))
+		if err != nil {
+			fmt.Println("new json: ", err)
+			return
+		}
+	}
+	conn.WriteJSON(res.Interface())
+}
+
 //func enterroom(json *simplejson.Json, conn *websocket.Conn);
 //func startroomgame(json *simplejson.Json, conn *websocket.Conn);
 //func broadcast(json *simplejson.Json, conn *websocket.Conn);
@@ -216,6 +275,7 @@ func ws(w http.ResponseWriter, r *http.Request) {
 		if mt != websocket.TextMessage {
 			continue
 		}
+		fmt.Printf("%s", message)
 
 		// 转换为json
 		json, err := simplejson.NewJson(message)
@@ -236,6 +296,8 @@ func ws(w http.ResponseWriter, r *http.Request) {
 			go login(json, conn)
 		} else if action == "updateuserinfo" {
 			go updateuserinfo(json, conn)
+		} else if action == "createroom" {
+			go createroom(json, conn)
 		}
 	}
 }
