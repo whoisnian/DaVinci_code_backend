@@ -405,3 +405,12 @@ members: 房间其它成员信息
     }
 }
 ```
+
+## Redis 数据
+使用redis保存房间，连接等临时信息
+
+* "roomcap"+roomid    string  房间人数限制            1 hour
+* "room"+roomid       list    已加入玩家的openid      1 hour
+* "userroom"+openid   string  玩家所在房间            1 hour
+
+var connall map[string]*websocket.Conn ws连接

@@ -25,6 +25,7 @@ var secret = flag.String("secret", "", "wechat secret")
 
 var db *sql.DB
 var redisclient *redis.Client
+var connall map[string]*websocket.Conn
 
 // 忽略Origin检查
 var upgrader = websocket.Upgrader{
@@ -105,6 +106,7 @@ func login(json *simplejson.Json, conn *websocket.Conn) {
 			}
 		}
 
+		connall[openid] = conn
 		res, err = simplejson.NewJson([]byte(`{
     "action": "loginres",
     "status": 0,
@@ -137,12 +139,14 @@ func login(json *simplejson.Json, conn *websocket.Conn) {
 	conn.WriteJSON(res.Interface())
 }
 
+// 更新个人信息
 func updateuserinfo(json *simplejson.Json, conn *websocket.Conn) {
 	openid, err := json.Get("data").Get("openid").String()
 	if err != nil {
 		fmt.Println("get openid: ", err)
 		return
 	}
+	connall[openid] = conn
 	nickName, err := json.Get("data").Get("nickName").String()
 	if err != nil {
 		fmt.Println("get nickName: ", err)
@@ -190,12 +194,14 @@ func updateuserinfo(json *simplejson.Json, conn *websocket.Conn) {
 	conn.WriteJSON(res.Interface())
 }
 
+// 创建新的游戏房间
 func createroom(json *simplejson.Json, conn *websocket.Conn) {
 	openid, err := json.Get("data").Get("openid").String()
 	if err != nil {
 		fmt.Println("get openid: ", err)
 		return
 	}
+	connall[openid] = conn
 	roomcapacity, err := json.Get("data").Get("roomcapacity").Int()
 	if err != nil {
 		fmt.Println("get roomcapacity: ", err)
@@ -214,18 +220,28 @@ func createroom(json *simplejson.Json, conn *websocket.Conn) {
 	}
 
 	if cnt <= 10 {
-		redisclient.Set("roomcap"+roomid, roomcapacity, time.Hour)
-		err = redisclient.RPush("room"+roomid, openid).Err()
-		redisclient.Expire("room"+roomid, time.Hour)
+		err = redisclient.SetNX("roomcap"+roomid, roomcapacity, time.Hour).Err()
+		if err == nil {
+			redisclient.Del("room" + roomid)
+			redisclient.RPush("room"+roomid, openid)
+			redisclient.Expire("room"+roomid, time.Hour)
+			redisclient.Set("userroom"+openid, roomid, time.Hour)
+		}
 	}
 
 	var res *simplejson.Json
 	if err != nil || cnt > 10 {
 		fmt.Println("create: ", err)
+		var errmsg string
+		if cnt > 10 {
+			errmsg = "服务器繁忙"
+		} else {
+			errmsg = err.Error()
+		}
 		res, err = simplejson.NewJson([]byte(`{
     "action": "createroomres",
     "status": -1,
-    "msg": "` + err.Error() + `",
+	"msg": "` + errmsg + `",
     "data": {
     }
 		}`))
@@ -250,7 +266,115 @@ func createroom(json *simplejson.Json, conn *websocket.Conn) {
 	conn.WriteJSON(res.Interface())
 }
 
-//func enterroom(json *simplejson.Json, conn *websocket.Conn);
+// 加入到已有的房间
+func enterroom(json *simplejson.Json, conn *websocket.Conn) {
+	openid, err := json.Get("data").Get("openid").String()
+	if err != nil {
+		fmt.Println("get openid: ", err)
+		return
+	}
+	connall[openid] = conn
+	roomid, err := json.Get("data").Get("roomid").String()
+	if err != nil {
+		fmt.Println("get roomid: ", err)
+		return
+	}
+
+	roomcap, err := redisclient.Get("roomcap" + roomid).Int()
+	roomnow := int(redisclient.LLen("room" + roomid).Val())
+
+	var openids []string
+	if roomnow > 0 && roomnow < roomcap {
+		openids = redisclient.LRange("room"+roomid, 0, -1).Val()
+		redisclient.RPush("room"+roomid, openid)
+		redisclient.Set("userroom"+openid, roomid, time.Hour)
+	}
+
+	var res *simplejson.Json
+	if err != nil || roomnow <= 0 || roomnow >= roomcap {
+		var errmsg string
+		if roomnow <= 0 {
+			errmsg = "房间不存在"
+		} else if roomnow >= roomcap {
+			errmsg = "房间已满"
+		} else {
+			errmsg = err.Error()
+		}
+		res, err = simplejson.NewJson([]byte(`{
+    "action": "enterroomres",
+    "status": -1,
+	"msg": "` + errmsg + `",
+    "data": {
+    }
+		}`))
+		if err != nil {
+			fmt.Println("new json: ", err)
+			return
+		}
+	} else {
+		row := db.QueryRow("SELECT nickname, avatarurl FROM user WHERE openid=?", openid)
+		var othernickName string
+		var otheravatarUrl string
+		row.Scan(&othernickName, &otheravatarUrl)
+		members := "["
+		for key, memberid := range openids {
+			if key != 0 {
+				members = members + ","
+			}
+			row = db.QueryRow("SELECT nickname, avatarurl FROM user WHERE openid=?", memberid)
+			var nickName string
+			var avatarUrl string
+			row.Scan(&nickName, &avatarUrl)
+			members = members + `{
+				"openid":"` + memberid + `",
+				"nickName":"` + nickName + `",
+				"avatarUrl":"` + avatarUrl + `"
+			}`
+			go otherenterroom(roomid, memberid, openid, othernickName, otheravatarUrl)
+		}
+		members = members + "]"
+		res, err = simplejson.NewJson([]byte(`{
+    "action": "enterroomres",
+    "status": 0,
+    "msg": "ok",
+    "data": {
+	"roomcapacity": ` + strconv.Itoa(roomcap) + `,
+	"members": ` + members + `
+    }
+		}`))
+		if err != nil {
+			fmt.Println("new json: ", err)
+			return
+		}
+	}
+	conn.WriteJSON(res.Interface())
+}
+
+// 其他人进入房间
+func otherenterroom(roomid string, memberid string, openid string, nickName string, avatarUrl string) {
+	var conn *websocket.Conn
+	conn = connall[memberid]
+	if conn == nil {
+		fmt.Println("get user conn: ")
+		return
+	}
+
+	res, err := simplejson.NewJson([]byte(`{
+    "action": "otherenterroom",
+    "data": {
+	"openid":"` + openid + `",
+	"nickName":"` + nickName + `",
+	"avatarUrl":"` + avatarUrl + `",
+	"roomid":"` + roomid + `"
+    }
+		}`))
+	if err != nil {
+		fmt.Println("new json: ", err)
+		return
+	}
+	conn.WriteJSON(res.Interface())
+}
+
 //func startroomgame(json *simplejson.Json, conn *websocket.Conn);
 //func broadcast(json *simplejson.Json, conn *websocket.Conn);
 //func uploadscores(json *simplejson.Json, conn *websocket.Conn);
@@ -298,6 +422,8 @@ func ws(w http.ResponseWriter, r *http.Request) {
 			go updateuserinfo(json, conn)
 		} else if action == "createroom" {
 			go createroom(json, conn)
+		} else if action == "enterroom" {
+			go enterroom(json, conn)
 		}
 	}
 }
@@ -325,6 +451,8 @@ func main() {
 		fmt.Println("redis: ", err)
 		return
 	}
+
+	connall = make(map[string]*websocket.Conn)
 
 	// 监听websocket连接
 	http.HandleFunc("/websocket", ws)
