@@ -9,7 +9,7 @@ openid
 
 ### 玩家战绩
 id  
-userid  
+openid  
 积分    
 总场数    
 4人房总场数  
