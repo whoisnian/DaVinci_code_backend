@@ -19,13 +19,9 @@ CREATE TABLE `DaVinci_code`.`score`(
     `openid` VARCHAR(255) NOT NULL,
     `scoreall` int(11) NOT NULL DEFAULT 0,
     `num` int(11) NOT NULL DEFAULT 0,
-    `numwin` int(11) NOT NULL DEFAULT 0,
     `num4` int(11) NOT NULL DEFAULT 0,
-    `numwin4` int(11) NOT NULL DEFAULT 0,
     `num3` int(11) NOT NULL DEFAULT 0,
-    `numwin3` int(11) NOT NULL DEFAULT 0,
     `num2` int(11) NOT NULL DEFAULT 0,
-    `numwin2` int(11) NOT NULL DEFAULT 0,
     PRIMARY KEY(`id`),
     UNIQUE(`openid`)
 ) ENGINE = InnoDB;

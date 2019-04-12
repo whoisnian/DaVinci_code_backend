@@ -10,14 +10,10 @@ openid
 ### 玩家战绩
 id  
 userid  
-积分  
-胜场数  
-总场数  
-4人房胜场数  
+积分    
+总场数    
 4人房总场数  
-3人房胜场数  
 3人房总场数  
-2人房胜场数  
 2人房总场数  
 
 ### 玩家个人设置
@@ -209,17 +205,6 @@ members: 房间其它成员信息
 }
 ```
 
-* 响应
-```json
-{
-    "action": "otherenterroomres",
-    "status": 0,
-    "msg": "",
-    "data": {
-    }
-}
-```
-
 ### 房主开始房间内游戏
 * 发送
 ```json
@@ -239,6 +224,8 @@ members: 房间其它成员信息
     "status": 0,
     "msg": "",
     "data": {
+        "openid": "",
+        "roomid": "",
         "members": [
         {
             "openid": "",
@@ -272,18 +259,7 @@ members: 房间其它成员信息
     "action": "roomgamestarted",
     "data": {
         "openid": "",
-        "roomid": ""
-    }
-}
-```
-
-* 响应
-```json
-{
-    "action": "roomgamestartedres",
-    "status": 0,
-    "msg": "",
-    "data": {
+        "roomid": "",
         "members": [
         {
             "openid": "",
@@ -352,18 +328,6 @@ members: 房间其它成员信息
 }
 ```
 
-* 响应
-```json
-{
-    "action": "otherbroadcastres",
-    "status": 0,
-    "msg": "",
-    "data": {
-
-    }
-}
-```
-
 ### 提交成绩
 * 发送
 ```json
@@ -372,6 +336,7 @@ members: 房间其它成员信息
     "data": {
         "openid": "",
         "roomid": "",
+        "store": true,
         "members": [
         {
             "openid": "",
@@ -393,6 +358,8 @@ members: 房间其它成员信息
     }
 }
 ```
+只有房主才能提交成绩  
+store: 是否计入积分进行存储  
 
 * 响应
 ```json

@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	gojson "encoding/json"
 	"flag"
 	"fmt"
 	"github.com/bitly/go-simplejson"
@@ -375,9 +376,277 @@ func otherenterroom(roomid string, memberid string, openid string, nickName stri
 	conn.WriteJSON(res.Interface())
 }
 
-//func startroomgame(json *simplejson.Json, conn *websocket.Conn);
-//func broadcast(json *simplejson.Json, conn *websocket.Conn);
-//func uploadscores(json *simplejson.Json, conn *websocket.Conn);
+// 房主开始游戏
+func startroomgame(json *simplejson.Json, conn *websocket.Conn) {
+	openid, err := json.Get("data").Get("openid").String()
+	if err != nil {
+		fmt.Println("get openid: ", err)
+		return
+	}
+	connall[openid] = conn
+	roomid, err := json.Get("data").Get("roomid").String()
+	if err != nil {
+		fmt.Println("get roomid: ", err)
+		return
+	}
+
+	roomcap, err := redisclient.Get("roomcap" + roomid).Int()
+	roomnow := int(redisclient.LLen("room" + roomid).Val())
+
+	var openids []string
+	if err == nil && roomnow == roomcap {
+		openids = redisclient.LRange("room"+roomid, 0, -1).Val()
+	}
+
+	var res *simplejson.Json
+	if err != nil || roomnow != roomcap || openid != openids[0] {
+		var errmsg string
+		if err != nil {
+			errmsg = "房间获取失败"
+		} else if roomnow != roomcap {
+			errmsg = "房间人数不足"
+		} else if openid != openids[0] {
+			errmsg = "只有房主才能开始游戏"
+		} else {
+			errmsg = err.Error()
+		}
+		res, err = simplejson.NewJson([]byte(`{
+    "action": "startroomgameres",
+    "status": -1,
+	"msg": "` + errmsg + `",
+    "data": {
+    }
+		}`))
+		if err != nil {
+			fmt.Println("new json: ", err)
+			return
+		}
+	} else {
+		members := "["
+		for key, memberid := range openids {
+			if key != 0 {
+				members = members + ","
+			}
+			row := db.QueryRow("SELECT nickname, avatarurl FROM user WHERE openid=?", memberid)
+			var nickName string
+			var avatarUrl string
+			row.Scan(&nickName, &avatarUrl)
+			members = members + `{
+				"openid":"` + memberid + `",
+				"nickName":"` + nickName + `",
+				"avatarUrl":"` + avatarUrl + `"
+			}`
+		}
+		members = members + "]"
+		for key, memberid := range openids {
+			if key != 0 {
+				go roomgamestarted(roomid, memberid, openid, members)
+			}
+		}
+		res, err = simplejson.NewJson([]byte(`{
+    "action": "startroomgameres",
+    "status": 0,
+    "msg": "ok",
+    "data": {
+	"openid":"` + openid + `",
+	"roomid":"` + roomid + `",
+	"members": ` + members + `
+    }
+		}`))
+		if err != nil {
+			fmt.Println("new json: ", err)
+			return
+		}
+	}
+	conn.WriteJSON(res.Interface())
+}
+
+// 向房主之外的玩家发送开始游戏信号
+func roomgamestarted(roomid string, memberid string, openid string, members string) {
+	var conn *websocket.Conn
+	conn = connall[memberid]
+	if conn == nil {
+		fmt.Println("get user conn: ")
+		return
+	}
+
+	res, err := simplejson.NewJson([]byte(`{
+    "action": "roomgamestarted",
+    "data": {
+	"openid":"` + openid + `",
+	"roomid":"` + roomid + `",
+	"members": ` + members + `
+    }
+		}`))
+	if err != nil {
+		fmt.Println("new json: ", err)
+		return
+	}
+	conn.WriteJSON(res.Interface())
+}
+
+// 请求转发消息
+func broadcast(json *simplejson.Json, conn *websocket.Conn) {
+	openid, err := json.Get("data").Get("openid").String()
+	if err != nil {
+		fmt.Println("get openid: ", err)
+		return
+	}
+	connall[openid] = conn
+	roomid, err := json.Get("data").Get("roomid").String()
+	if err != nil {
+		fmt.Println("get roomid: ", err)
+		return
+	}
+
+	_, err = redisclient.Get("roomcap" + roomid).Int()
+	roomnow := int(redisclient.LLen("room" + roomid).Val())
+
+	var openids []string
+	if err == nil && roomnow > 0 {
+		openids = redisclient.LRange("room"+roomid, 0, -1).Val()
+	}
+
+	var res *simplejson.Json
+	if err != nil || roomnow <= 0 {
+		var errmsg string
+		if err != nil {
+			errmsg = "房间获取失败"
+		} else if roomnow <= 0 {
+			errmsg = "空房间"
+		}
+		res, err = simplejson.NewJson([]byte(`{
+    "action": "broadcastres",
+    "status": -1,
+	"msg": "` + errmsg + `",
+    "data": {
+    }
+		}`))
+		if err != nil {
+			fmt.Println("new json: ", err)
+			return
+		}
+	} else {
+		for _, memberid := range openids {
+			if openid != memberid {
+				go otherbroadcast(memberid, json)
+			}
+		}
+		res, err = simplejson.NewJson([]byte(`{
+    "action": "broadcastres",
+    "status": 0,
+    "msg": "ok",
+    "data": {
+    }
+		}`))
+		if err != nil {
+			fmt.Println("new json: ", err)
+			return
+		}
+	}
+	conn.WriteJSON(res.Interface())
+}
+
+// 向房间内其他人转发消息
+func otherbroadcast(memberid string, json *simplejson.Json) {
+	var conn *websocket.Conn
+	conn = connall[memberid]
+	if conn == nil {
+		fmt.Println("get user conn: ")
+		return
+	}
+	json.Set("action", "otherbroadcast")
+	conn.WriteJSON(json.Interface())
+}
+
+// 提交成绩
+func uploadscores(json *simplejson.Json, conn *websocket.Conn) {
+	openid, err := json.Get("data").Get("openid").String()
+	if err != nil {
+		fmt.Println("get openid: ", err)
+		return
+	}
+	connall[openid] = conn
+	roomid, err := json.Get("data").Get("roomid").String()
+	if err != nil {
+		fmt.Println("get roomid: ", err)
+		return
+	}
+	store, err := json.Get("data").Get("store").Bool()
+	if err != nil {
+		fmt.Println("get store: ", err)
+		return
+	}
+	members, err := json.Get("data").Get("members").Array()
+	if err != nil {
+		fmt.Println("get members: ", err)
+		return
+	}
+
+	roomcap, err := redisclient.Get("roomcap" + roomid).Int()
+	roomnow := int(redisclient.LLen("room" + roomid).Val())
+
+	var openids []string
+	if err == nil && roomnow == roomcap {
+		openids = redisclient.LRange("room"+roomid, 0, -1).Val()
+	}
+
+	var res *simplejson.Json
+	if err != nil || roomnow != roomcap || openid != openids[0] {
+		var errmsg string
+		if err != nil {
+			errmsg = "房间获取失败"
+		} else if roomnow != roomcap {
+			errmsg = "房间状态异常"
+		} else if openid != openids[0] {
+			errmsg = "只有房主才能提交成绩"
+		} else {
+			errmsg = err.Error()
+		}
+		res, err = simplejson.NewJson([]byte(`{
+    "action": "uploadscores",
+    "status": -1,
+	"msg": "` + errmsg + `",
+    "data": {
+    }
+		}`))
+		if err != nil {
+			fmt.Println("new json: ", err)
+			return
+		}
+	} else {
+		if store {
+			for _, member := range members {
+				m, _ := member.(map[string]interface{})
+				mopenid, _ := m["openid"].(string)
+				mscore, _ := m["score"].(gojson.Number).Int64()
+				if roomcap == 4 {
+					_, err = db.Exec("UPDATE score SET scoreall=scoreall+?,num=num+1,num4=num4+1 WHERE openid=?", mscore, mopenid)
+				} else if roomcap == 3 {
+					_, err = db.Exec("UPDATE score SET scoreall=scoreall+?,num=num+1,num3=num4+1 WHERE openid=?", mscore, mopenid)
+				} else if roomcap == 2 {
+					_, err = db.Exec("UPDATE score SET scoreall=scoreall+?,num=num+1,num2=num4+1 WHERE openid=?", mscore, mopenid)
+				}
+				if err != nil {
+					fmt.Println("update: ", err.Error())
+					break
+				}
+			}
+		}
+		res, err = simplejson.NewJson([]byte(`{
+    "action": "uploadscores",
+    "status": 0,
+    "msg": "ok",
+    "data": {
+    }
+		}`))
+		if err != nil {
+			fmt.Println("new json: ", err)
+			return
+		}
+	}
+	conn.WriteJSON(res.Interface())
+}
 
 func ws(w http.ResponseWriter, r *http.Request) {
 	// 建立websocket连接
@@ -424,6 +693,12 @@ func ws(w http.ResponseWriter, r *http.Request) {
 			go createroom(json, conn)
 		} else if action == "enterroom" {
 			go enterroom(json, conn)
+		} else if action == "startroomgame" {
+			go startroomgame(json, conn)
+		} else if action == "broadcast" {
+			go broadcast(json, conn)
+		} else if action == "uploadscores" {
+			go uploadscores(json, conn)
 		}
 	}
 }
