@@ -13,6 +13,7 @@ import (
 	"math/rand"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -27,6 +28,7 @@ var secret = flag.String("secret", "", "wechat secret")
 var db *sql.DB
 var redisclient *redis.Client
 var connall map[string]*websocket.Conn
+var muxall map[string]*sync.Mutex
 
 // 忽略Origin检查
 var upgrader = websocket.Upgrader{
@@ -108,6 +110,7 @@ func login(json *simplejson.Json, conn *websocket.Conn) {
 		}
 
 		connall[openid] = conn
+		muxall[openid] = &sync.Mutex{}
 		res, err = simplejson.NewJson([]byte(`{
     "action": "loginres",
     "status": 0,
@@ -121,6 +124,9 @@ func login(json *simplejson.Json, conn *websocket.Conn) {
 			fmt.Println("new json: ", err)
 			return
 		}
+		muxall[openid].Lock()
+		conn.WriteJSON(res.Interface())
+		muxall[openid].Unlock()
 	} else {
 		errmsg, err := respjson.Get("errmsg").String()
 		res, err = simplejson.NewJson([]byte(`{
@@ -136,8 +142,8 @@ func login(json *simplejson.Json, conn *websocket.Conn) {
 			fmt.Println("new json: ", err)
 			return
 		}
+		conn.WriteJSON(res.Interface())
 	}
-	conn.WriteJSON(res.Interface())
 }
 
 // 更新个人信息
@@ -148,6 +154,7 @@ func updateuserinfo(json *simplejson.Json, conn *websocket.Conn) {
 		return
 	}
 	connall[openid] = conn
+	muxall[openid] = &sync.Mutex{}
 	nickName, err := json.Get("data").Get("nickName").String()
 	if err != nil {
 		fmt.Println("get nickName: ", err)
@@ -192,7 +199,9 @@ func updateuserinfo(json *simplejson.Json, conn *websocket.Conn) {
 			return
 		}
 	}
+	muxall[openid].Lock()
 	conn.WriteJSON(res.Interface())
+	muxall[openid].Unlock()
 }
 
 // 创建新的游戏房间
@@ -203,6 +212,7 @@ func createroom(json *simplejson.Json, conn *websocket.Conn) {
 		return
 	}
 	connall[openid] = conn
+	muxall[openid] = &sync.Mutex{}
 	roomcapacity, err := json.Get("data").Get("roomcapacity").Int()
 	if err != nil {
 		fmt.Println("get roomcapacity: ", err)
@@ -264,7 +274,9 @@ func createroom(json *simplejson.Json, conn *websocket.Conn) {
 			return
 		}
 	}
+	muxall[openid].Lock()
 	conn.WriteJSON(res.Interface())
+	muxall[openid].Unlock()
 }
 
 // 加入到已有的房间
@@ -275,6 +287,7 @@ func enterroom(json *simplejson.Json, conn *websocket.Conn) {
 		return
 	}
 	connall[openid] = conn
+	muxall[openid] = &sync.Mutex{}
 	roomid, err := json.Get("data").Get("roomid").String()
 	if err != nil {
 		fmt.Println("get roomid: ", err)
@@ -348,7 +361,9 @@ func enterroom(json *simplejson.Json, conn *websocket.Conn) {
 			return
 		}
 	}
+	muxall[openid].Lock()
 	conn.WriteJSON(res.Interface())
+	muxall[openid].Unlock()
 }
 
 // 其他人进入房间
@@ -373,7 +388,9 @@ func otherenterroom(roomid string, memberid string, openid string, nickName stri
 		fmt.Println("new json: ", err)
 		return
 	}
+	muxall[memberid].Lock()
 	conn.WriteJSON(res.Interface())
+	muxall[memberid].Unlock()
 }
 
 // 房主开始游戏
@@ -384,6 +401,7 @@ func startroomgame(json *simplejson.Json, conn *websocket.Conn) {
 		return
 	}
 	connall[openid] = conn
+	muxall[openid] = &sync.Mutex{}
 	roomid, err := json.Get("data").Get("roomid").String()
 	if err != nil {
 		fmt.Println("get roomid: ", err)
@@ -458,7 +476,9 @@ func startroomgame(json *simplejson.Json, conn *websocket.Conn) {
 			return
 		}
 	}
+	muxall[openid].Lock()
 	conn.WriteJSON(res.Interface())
+	muxall[openid].Unlock()
 }
 
 // 向房主之外的玩家发送开始游戏信号
@@ -482,7 +502,9 @@ func roomgamestarted(roomid string, memberid string, openid string, members stri
 		fmt.Println("new json: ", err)
 		return
 	}
+	muxall[memberid].Lock()
 	conn.WriteJSON(res.Interface())
+	muxall[memberid].Unlock()
 }
 
 // 请求转发消息
@@ -493,6 +515,7 @@ func broadcast(json *simplejson.Json, conn *websocket.Conn) {
 		return
 	}
 	connall[openid] = conn
+	muxall[openid] = &sync.Mutex{}
 	roomid, err := json.Get("data").Get("roomid").String()
 	if err != nil {
 		fmt.Println("get roomid: ", err)
@@ -544,7 +567,9 @@ func broadcast(json *simplejson.Json, conn *websocket.Conn) {
 			return
 		}
 	}
+	muxall[openid].Lock()
 	conn.WriteJSON(res.Interface())
+	muxall[openid].Unlock()
 }
 
 // 向房间内其他人转发消息
@@ -556,7 +581,9 @@ func otherbroadcast(memberid string, json *simplejson.Json) {
 		return
 	}
 	json.Set("action", "otherbroadcast")
+	muxall[memberid].Lock()
 	conn.WriteJSON(json.Interface())
+	muxall[memberid].Unlock()
 }
 
 // 提交成绩
@@ -567,6 +594,7 @@ func uploadscores(json *simplejson.Json, conn *websocket.Conn) {
 		return
 	}
 	connall[openid] = conn
+	muxall[openid] = &sync.Mutex{}
 	roomid, err := json.Get("data").Get("roomid").String()
 	if err != nil {
 		fmt.Println("get roomid: ", err)
@@ -645,7 +673,9 @@ func uploadscores(json *simplejson.Json, conn *websocket.Conn) {
 			return
 		}
 	}
+	muxall[openid].Lock()
 	conn.WriteJSON(res.Interface())
+	muxall[openid].Unlock()
 }
 
 func ws(w http.ResponseWriter, r *http.Request) {
@@ -728,6 +758,7 @@ func main() {
 	}
 
 	connall = make(map[string]*websocket.Conn)
+	muxall = make(map[string]*sync.Mutex)
 
 	// 监听websocket连接
 	http.HandleFunc("/websocket", ws)
