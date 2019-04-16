@@ -373,6 +373,57 @@ store: 是否计入积分进行存储
 }
 ```
 
+### 获取房间信息
+* 发送
+```json
+{
+    "action": "getroominfo",
+    "data": {
+        "openid": "",
+        "roomid": ""
+    }
+}
+```
+
+* 响应
+```json
+{
+    "action": "getroominfores",
+    "status": 0,
+    "msg": "",
+    "data": {
+        "openid": "",
+        "roomid": "",
+        "roomcap": 4,
+        "roomnow": 4,
+        "members": [
+        {
+            "openid": "",
+            "nickName": "",
+            "avatarUrl": ""
+        },
+        {
+            "openid": "",
+            "nickName": "",
+            "avatarUrl": ""
+        },
+        {
+            "openid": "",
+            "nickName": "",
+            "avatarUrl": ""
+        },
+        {
+            "openid": "",
+            "nickName": "",
+            "avatarUrl": ""
+        }
+        ]
+    }
+}
+```
+roomcap：几人房  
+roomnow：当前人数  
+
 ## Redis 数据
 使用redis保存房间，连接等临时信息
 

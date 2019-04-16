@@ -678,6 +678,82 @@ func uploadscores(json *simplejson.Json, conn *websocket.Conn) {
 	muxall[openid].Unlock()
 }
 
+// 获取房间信息
+func getroominfo(json *simplejson.Json, conn *websocket.Conn) {
+	openid, err := json.Get("data").Get("openid").String()
+	if err != nil {
+		fmt.Println("get openid: ", err)
+		return
+	}
+	connall[openid] = conn
+	muxall[openid] = &sync.Mutex{}
+	roomid, err := json.Get("data").Get("roomid").String()
+	if err != nil {
+		fmt.Println("get roomid: ", err)
+		return
+	}
+
+	roomcap, err := redisclient.Get("roomcap" + roomid).Int()
+	roomnow := int(redisclient.LLen("room" + roomid).Val())
+
+	var openids []string
+	if err == nil {
+		openids = redisclient.LRange("room"+roomid, 0, -1).Val()
+	}
+
+	var res *simplejson.Json
+	if err != nil {
+		errmsg := "房间获取失败"
+		res, err = simplejson.NewJson([]byte(`{
+    "action": "getroominfores",
+    "status": -1,
+	"msg": "` + errmsg + `",
+    "data": {
+    }
+		}`))
+		if err != nil {
+			fmt.Println("new json: ", err)
+			return
+		}
+	} else {
+		members := "["
+		for key, memberid := range openids {
+			if key != 0 {
+				members = members + ","
+			}
+			row := db.QueryRow("SELECT nickname, avatarurl FROM user WHERE openid=?", memberid)
+			var nickName string
+			var avatarUrl string
+			row.Scan(&nickName, &avatarUrl)
+			members = members + `{
+				"openid":"` + memberid + `",
+				"nickName":"` + nickName + `",
+				"avatarUrl":"` + avatarUrl + `"
+			}`
+		}
+		members = members + "]"
+		res, err = simplejson.NewJson([]byte(`{
+    "action": "getroominfores",
+    "status": 0,
+    "msg": "ok",
+    "data": {
+	"openid":"` + openid + `",
+	"roomid":"` + roomid + `",
+	"roomcap":` + strconv.Itoa(roomcap) + `,
+	"roomnow": ` + strconv.Itoa(roomnow) + `,
+	"members": ` + members + `
+    }
+		}`))
+		if err != nil {
+			fmt.Println("new json: ", err)
+			return
+		}
+	}
+	muxall[openid].Lock()
+	conn.WriteJSON(res.Interface())
+	muxall[openid].Unlock()
+}
+
 func ws(w http.ResponseWriter, r *http.Request) {
 	// 建立websocket连接
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -729,6 +805,8 @@ func ws(w http.ResponseWriter, r *http.Request) {
 			go broadcast(json, conn)
 		} else if action == "uploadscores" {
 			go uploadscores(json, conn)
+		} else if action == "getroominfo" {
+			go getroominfo(json, conn)
 		}
 	}
 }
