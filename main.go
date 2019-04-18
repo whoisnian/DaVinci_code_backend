@@ -110,7 +110,9 @@ func login(json *simplejson.Json, conn *websocket.Conn) {
 		}
 
 		connall[openid] = conn
-		muxall[openid] = &sync.Mutex{}
+		if _, ok := muxall[openid]; !ok {
+			muxall[openid] = &sync.Mutex{}
+		}
 		res, err = simplejson.NewJson([]byte(`{
     "action": "loginres",
     "status": 0,
@@ -154,7 +156,9 @@ func updateuserinfo(json *simplejson.Json, conn *websocket.Conn) {
 		return
 	}
 	connall[openid] = conn
-	muxall[openid] = &sync.Mutex{}
+	if _, ok := muxall[openid]; !ok {
+		muxall[openid] = &sync.Mutex{}
+	}
 	nickName, err := json.Get("data").Get("nickName").String()
 	if err != nil {
 		fmt.Println("get nickName: ", err)
@@ -212,7 +216,9 @@ func createroom(json *simplejson.Json, conn *websocket.Conn) {
 		return
 	}
 	connall[openid] = conn
-	muxall[openid] = &sync.Mutex{}
+	if _, ok := muxall[openid]; !ok {
+		muxall[openid] = &sync.Mutex{}
+	}
 	roomcapacity, err := json.Get("data").Get("roomcapacity").Int()
 	if err != nil {
 		fmt.Println("get roomcapacity: ", err)
@@ -287,7 +293,9 @@ func enterroom(json *simplejson.Json, conn *websocket.Conn) {
 		return
 	}
 	connall[openid] = conn
-	muxall[openid] = &sync.Mutex{}
+	if _, ok := muxall[openid]; !ok {
+		muxall[openid] = &sync.Mutex{}
+	}
 	roomid, err := json.Get("data").Get("roomid").String()
 	if err != nil {
 		fmt.Println("get roomid: ", err)
@@ -389,7 +397,11 @@ func otherenterroom(roomid string, memberid string, openid string, nickName stri
 		return
 	}
 	muxall[memberid].Lock()
-	conn.WriteJSON(res.Interface())
+	fmt.Println("send otherenterroom to", memberid)
+	err = conn.WriteJSON(res.Interface())
+	if err != nil {
+		fmt.Println("write json: ", err)
+	}
 	muxall[memberid].Unlock()
 }
 
@@ -401,7 +413,9 @@ func startroomgame(json *simplejson.Json, conn *websocket.Conn) {
 		return
 	}
 	connall[openid] = conn
-	muxall[openid] = &sync.Mutex{}
+	if _, ok := muxall[openid]; !ok {
+		muxall[openid] = &sync.Mutex{}
+	}
 	roomid, err := json.Get("data").Get("roomid").String()
 	if err != nil {
 		fmt.Println("get roomid: ", err)
@@ -410,6 +424,10 @@ func startroomgame(json *simplejson.Json, conn *websocket.Conn) {
 
 	roomcap, err := redisclient.Get("roomcap" + roomid).Int()
 	roomnow := int(redisclient.LLen("room" + roomid).Val())
+
+	/**************忽略人数不足的情况****************/
+	roomnow = roomcap
+	/************************************************/
 
 	var openids []string
 	if err == nil && roomnow == roomcap {
@@ -503,7 +521,11 @@ func roomgamestarted(roomid string, memberid string, openid string, members stri
 		return
 	}
 	muxall[memberid].Lock()
-	conn.WriteJSON(res.Interface())
+	fmt.Println("send roomgamestarted to", memberid)
+	err = conn.WriteJSON(res.Interface())
+	if err != nil {
+		fmt.Println("write json: ", err)
+	}
 	muxall[memberid].Unlock()
 }
 
@@ -515,7 +537,9 @@ func broadcast(json *simplejson.Json, conn *websocket.Conn) {
 		return
 	}
 	connall[openid] = conn
-	muxall[openid] = &sync.Mutex{}
+	if _, ok := muxall[openid]; !ok {
+		muxall[openid] = &sync.Mutex{}
+	}
 	roomid, err := json.Get("data").Get("roomid").String()
 	if err != nil {
 		fmt.Println("get roomid: ", err)
@@ -582,7 +606,11 @@ func otherbroadcast(memberid string, json *simplejson.Json) {
 	}
 	json.Set("action", "otherbroadcast")
 	muxall[memberid].Lock()
-	conn.WriteJSON(json.Interface())
+	fmt.Println("send otherbroadcast to", memberid)
+	err := conn.WriteJSON(json.Interface())
+	if err != nil {
+		fmt.Println("write json: ", err)
+	}
 	muxall[memberid].Unlock()
 }
 
@@ -594,7 +622,9 @@ func uploadscores(json *simplejson.Json, conn *websocket.Conn) {
 		return
 	}
 	connall[openid] = conn
-	muxall[openid] = &sync.Mutex{}
+	if _, ok := muxall[openid]; !ok {
+		muxall[openid] = &sync.Mutex{}
+	}
 	roomid, err := json.Get("data").Get("roomid").String()
 	if err != nil {
 		fmt.Println("get roomid: ", err)
@@ -686,7 +716,9 @@ func getroominfo(json *simplejson.Json, conn *websocket.Conn) {
 		return
 	}
 	connall[openid] = conn
-	muxall[openid] = &sync.Mutex{}
+	if _, ok := muxall[openid]; !ok {
+		muxall[openid] = &sync.Mutex{}
+	}
 	roomid, err := json.Get("data").Get("roomid").String()
 	if err != nil {
 		fmt.Println("get roomid: ", err)
@@ -774,7 +806,8 @@ func ws(w http.ResponseWriter, r *http.Request) {
 		if mt != websocket.TextMessage {
 			continue
 		}
-		fmt.Printf("%s", message)
+		fmt.Printf("==========new message==========\n\n")
+		fmt.Printf("%s\n\n", message)
 
 		// 转换为json
 		json, err := simplejson.NewJson(message)
@@ -840,6 +873,7 @@ func main() {
 
 	// 监听websocket连接
 	http.HandleFunc("/websocket", ws)
+	fmt.Println("start 127.0.0.1:8080/websocket")
 	err = http.ListenAndServe(*addr, nil)
 	if err != nil {
 		fmt.Println("listen: ", err)
